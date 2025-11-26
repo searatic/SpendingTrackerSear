@@ -1,45 +1,52 @@
 //
-// DataController.swift
-// SpendingTracker
+//  DataController.swift
+//  SpendingTrackerSear
 //
-// Created by Developer on 10/5/2025.
-// Purpose: Centralized SwiftData persistence management
+//  Centralized SwiftData persistence management
 //
 
 import SwiftData
 import SwiftUI
 import OSLog
 
-@MainActor
-class DataController {
-    static let shared = DataController()
+final class DataController {
     let container: ModelContainer
-    
-    private init() {
-        let schema = Schema([
-            ExpenseModel.self,
-            CategoryModel.self,
-            BudgetModel.self
-        ])
-        
-        let config = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: false
-        )
-        
+
+    // MARK: - Initializers
+
+    /// Main app initializer (persistent on disk)
+    private init(inMemory: Bool = false) {
         do {
-            container = try ModelContainer(for: schema, configurations: [config])
-            Logger.data.info("✅ ModelContainer created successfully")
+            let configuration = ModelConfiguration(isStoredInMemoryOnly: inMemory)
+
+            container = try ModelContainer(
+                for: ExpenseModel.self,
+                CategoryModel.self,
+                BudgetModel.self,
+                configurations: configuration
+            )
+
+            Logger.data.info("✅ ModelContainer created successfully (inMemory: \(inMemory, privacy: .public))")
         } catch {
+            Logger.data.fault("❌ Failed to create ModelContainer: \(String(describing: error), privacy: .public)")
             fatalError("Failed to create ModelContainer: \(error)")
         }
     }
-    
-    // Preview configuration for SwiftUI previews
+
+    // MARK: - Shared instances
+
+    /// Live container for the running app
+    @MainActor
+    static let live: DataController = {
+        DataController(inMemory: false)
+    }()
+
+    /// In-memory container for SwiftUI previews
+    @MainActor
     static let preview: DataController = {
-        let controller = DataController()
+        let controller = DataController(inMemory: true)
         let context = controller.container.mainContext
-        
+
         // Add preview categories
         let groceryCategory = CategoryModel(
             name: "Groceries",
@@ -47,30 +54,30 @@ class DataController {
             colorHex: "#4ECDC4"
         )
         context.insert(groceryCategory)
-        
+
         let foodCategory = CategoryModel(
             name: "Food & Dining",
             icon: "fork.knife",
             colorHex: "#FF6B6B"
         )
         context.insert(foodCategory)
-        
-        // Add preview expenses with CORRECT parameter order
+
+        // Add preview expenses
         let expense1 = ExpenseModel(
-            amount: 45.99,                          // 1. amount
-            category: groceryCategory,              // 2. category
-            location: "Whole Foods",                // 3. location
-            date: Date(),                           // 4. date
-            notes: "Weekly shopping",               // 5. notes
-            receiptPhotoData: nil,                  // 6. receiptPhotoData
-            isRecurring: false,                     // 7. isRecurring
-            recurringFrequency: nil,                // 8. recurringFrequency
-            tags: ["groceries", "essentials"],      // 9. tags
-            paymentMethod: .credit,                 // 10. paymentMethod
-            isPaymentMethodRequired: false          // 11. isPaymentMethodRequired
+            amount: 45.99,
+            category: groceryCategory,
+            location: "Whole Foods",
+            date: Date(),
+            notes: "Weekly shopping",
+            receiptPhotoData: nil,
+            isRecurring: false,
+            recurringFrequency: nil,
+            tags: ["groceries", "essentials"],
+            paymentMethod: .credit,
+            isPaymentMethodRequired: false
         )
         context.insert(expense1)
-        
+
         let expense2 = ExpenseModel(
             amount: 23.50,
             category: foodCategory,
@@ -85,16 +92,21 @@ class DataController {
             isPaymentMethodRequired: false
         )
         context.insert(expense2)
-        
+
         // Add preview budget
         let budget = BudgetModel(
             category: groceryCategory,
             monthlyLimit: 500.0
         )
         context.insert(budget)
-        
-        try? context.save()
-        Logger.data.info("✅ Preview data created")
+
+        do {
+            try context.save()
+            Logger.data.info("✅ Preview data created")
+        } catch {
+            Logger.data.error("❌ Failed to save preview data: \(String(describing: error), privacy: .public)")
+        }
+
         return controller
     }()
 }
