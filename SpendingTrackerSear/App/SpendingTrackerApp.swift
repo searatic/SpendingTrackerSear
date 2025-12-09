@@ -21,7 +21,6 @@ struct SpendingTrackerApp: App {
                 ExpenseListView()
                     .navigationDestination(for: Route.self) { route in
                         route.destination
-                            .navigationBarBackButtonHidden(false)
                             .toolbar(.visible, for: .navigationBar)
                     }
             }
