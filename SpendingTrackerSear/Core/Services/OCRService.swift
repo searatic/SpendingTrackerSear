@@ -103,54 +103,172 @@ struct OCRService {
     }
     
     private static func extractAmount(from fullText: String, lines: [String]) -> Double? {
-        // Strategy 1: Look for total line specifically first
-        let totalPatterns = [
-            #"(?:total|amount due|balance)[:\s]*\$?(\d+\.?\d*)"#,
-            #"(?:total)[:\s]*(\d+\.\d{2})"#
+        // Priority 1: Highest priority keywords (150)
+        let highestPriorityKeywords = [
+            "total amount",
+            "amount total"
         ]
-        
-        for pattern in totalPatterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                let range = NSRange(fullText.startIndex..., in: fullText)
-                if let match = regex.firstMatch(in: fullText, range: range) {
-                    if let amountRange = Range(match.range(at: 1), in: fullText) {
-                        let amountString = String(fullText[amountRange])
-                        if let amount = Double(amountString) {
-                            Logger.data.info("✅ Amount found via total pattern: $\(amount)")
-                            return amount
+
+        // Priority 2: High priority keywords (120)
+        let highPriorityKeywords = [
+            "grand total",
+            "final total"
+        ]
+
+        // Priority 3: Medium-high priority - simple "Total" (100 + line index)
+        // Handled separately to prefer later occurrences
+
+        // Priority 4: Lower priority keywords (80)
+        let lowerPriorityKeywords = [
+            "amount due",
+            "balance due",
+            "you paid",
+            "charge total",
+            "total due"
+        ]
+
+        // Keywords to IGNORE - these are NOT the final amount
+        let ignoreKeywords = [
+            "subtotal",
+            "sub-total",
+            "sub total",
+            "tax",
+            "tip",
+            "discount",
+            "change",
+            "cash",
+            "card",
+            "credit",
+            "debit",
+            "tendered",
+            "payment",
+            "paid with",
+            "amount tendered"
+        ]
+
+        // Track all potential totals with their source
+        struct PotentialTotal {
+            let amount: Double
+            let line: String
+            let reason: String
+            let priority: Int  // Higher = better
+        }
+
+        var potentialTotals: [PotentialTotal] = []
+
+        // Amount pattern: matches $XX.XX or XX.XX
+        let amountPattern = #"\$?\s*(\d+\.\d{2})"#
+        guard let regex = try? NSRegularExpression(pattern: amountPattern, options: []) else {
+            Logger.data.warning("⚠️ Failed to create regex")
+            return nil
+        }
+
+        // Process each line
+        for (index, line) in lines.enumerated() {
+            let lineLower = line.lowercased()
+
+            // Skip lines with ignore keywords
+            let shouldIgnore = ignoreKeywords.contains { lineLower.contains($0) }
+            if shouldIgnore {
+                Logger.data.info("   Ignoring line (excluded keyword): '\(line)'")
+                continue
+            }
+
+            // Find amounts in this line
+            let range = NSRange(line.startIndex..., in: line)
+            let matches = regex.matches(in: line, range: range)
+
+            for match in matches {
+                if let amountRange = Range(match.range(at: 1), in: line) {
+                    let amountString = String(line[amountRange])
+                    if let amount = Double(amountString), amount > 0 {
+                        // Determine priority based on keywords
+                        var priority = 0
+                        var reason = "no keyword match"
+
+                        // Priority 1: Highest priority (150) - "Total Amount" / "Amount Total"
+                        for keyword in highestPriorityKeywords {
+                            if lineLower.contains(keyword) {
+                                priority = 150
+                                reason = "matched '\(keyword)'"
+                                break
+                            }
                         }
+
+                        // Priority 2: High priority (120) - "Grand Total" / "Final Total"
+                        if priority == 0 {
+                            for keyword in highPriorityKeywords {
+                                if lineLower.contains(keyword) {
+                                    priority = 120
+                                    reason = "matched '\(keyword)'"
+                                    break
+                                }
+                            }
+                        }
+
+                        // Priority 3: Medium-high (100 + line index) - simple "Total"
+                        // Check for exact "total" word boundary to avoid partial matches
+                        if priority == 0 {
+                            let totalPattern = #"\btotal\b"#
+                            if let totalRegex = try? NSRegularExpression(pattern: totalPattern, options: .caseInsensitive) {
+                                let lineRange = NSRange(lineLower.startIndex..., in: lineLower)
+                                if totalRegex.firstMatch(in: lineLower, range: lineRange) != nil {
+                                    priority = 100 + index
+                                    reason = "matched 'total' (exact) at line \(index)"
+                                }
+                            }
+                        }
+
+                        // Priority 4: Lower priority (80) - "Amount Due" / "Balance Due" etc.
+                        if priority == 0 {
+                            for keyword in lowerPriorityKeywords {
+                                if lineLower.contains(keyword) {
+                                    priority = 80
+                                    reason = "matched '\(keyword)'"
+                                    break
+                                }
+                            }
+                        }
+
+                        potentialTotals.append(PotentialTotal(
+                            amount: amount,
+                            line: line,
+                            reason: reason,
+                            priority: priority
+                        ))
                     }
                 }
             }
         }
-        
-        // Strategy 2: Find largest amount in the receipt (likely the total)
-        let amountPattern = #"\$?(\d+\.\d{2})"#
-        if let regex = try? NSRegularExpression(pattern: amountPattern, options: []) {
-            var amounts: [Double] = []
-            
-            for line in lines {
-                let range = NSRange(line.startIndex..., in: line)
-                let matches = regex.matches(in: line, range: range)
-                
-                for match in matches {
-                    if let amountRange = Range(match.range(at: 1), in: line) {
-                        let amountString = String(line[amountRange])
-                        if let amount = Double(amountString) {
-                            amounts.append(amount)
-                            Logger.data.info("   Found amount: $\(amount) in line: '\(line)'")
-                        }
-                    }
-                }
-            }
-            
-            // Return the largest amount found (usually the total)
-            if let maxAmount = amounts.max() {
-                Logger.data.info("✅ Selected largest amount: $\(maxAmount)")
-                return maxAmount
-            }
+
+        // Log all potential totals
+        print("🔍 Found potential totals:")
+        for total in potentialTotals {
+            print("   $\(String(format: "%.2f", total.amount)) (priority: \(total.priority)) - \(total.reason) - '\(total.line)'")
         }
-        
+
+        // Selection logic: Pick highest priority, then largest amount as tiebreaker
+        let sorted = potentialTotals.sorted {
+            if $0.priority != $1.priority {
+                return $0.priority > $1.priority
+            }
+            return $0.amount > $1.amount
+        }
+
+        if let selected = sorted.first, selected.priority > 0 {
+            print("✅ Selected amount: $\(String(format: "%.2f", selected.amount)) because \(selected.reason)")
+            Logger.data.info("✅ Selected amount: $\(selected.amount) - \(selected.reason)")
+            return selected.amount
+        }
+
+        // 3. Fallback: Use the LARGEST amount on the receipt
+        if let selected = potentialTotals.max(by: { $0.amount < $1.amount }) {
+            print("✅ Selected amount: $\(String(format: "%.2f", selected.amount)) because it's the largest amount (fallback)")
+            Logger.data.info("✅ Selected amount: $\(selected.amount) - largest amount fallback")
+            return selected.amount
+        }
+
+        print("⚠️ No amount found in receipt")
         Logger.data.warning("⚠️ No amount found in receipt")
         return nil
     }

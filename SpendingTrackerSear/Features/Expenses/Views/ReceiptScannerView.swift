@@ -16,7 +16,11 @@ struct ReceiptScannerView: View {
     @State private var isProcessing = false
     @State private var scannedData: ReceiptData?
     @State private var errorMessage: String?
-    
+
+    // Editable fields for user correction
+    @State private var editableAmount: String = ""
+    @State private var editableLocation: String = ""
+
     // NEW: Direct binding to ViewModel state
     @Binding var pendingScanData: ReceiptData?
     @Binding var shouldProcessScan: Bool
@@ -36,37 +40,46 @@ struct ReceiptScannerView: View {
                     if isProcessing {
                         ProgressView("Processing receipt...")
                             .padding()
-                    } else if let data = scannedData {
-                        // Show extracted data
+                    } else if scannedData != nil {
+                        // Show extracted data with editable fields
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Extracted Data")
                                 .font(.headline)
-                            
-                            if let amount = data.amount {
+
+                            Text("Tap to edit if OCR made mistakes")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            // Editable Amount
+                            HStack {
+                                Text("Amount:")
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 70, alignment: .leading)
                                 HStack {
-                                    Text("Amount:")
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text("$\(amount, specifier: "%.2f")")
-                                        .bold()
+                                    Text("$")
+                                    TextField("0.00", text: $editableAmount)
+                                        .keyboardType(.decimalPad)
+                                        .textFieldStyle(.roundedBorder)
                                 }
                             }
-                            
-                            if let location = data.location {
-                                HStack {
-                                    Text("Location:")
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text(location)
-                                }
+
+                            // Editable Location
+                            HStack {
+                                Text("Location:")
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 70, alignment: .leading)
+                                TextField("Store name", text: $editableLocation)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            
-                            if let date = data.date {
+
+                            // Date (read-only for now)
+                            if let date = scannedData?.date {
                                 HStack {
                                     Text("Date:")
                                         .foregroundStyle(.secondary)
-                                    Spacer()
+                                        .frame(width: 70, alignment: .leading)
                                     Text(date, style: .date)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                             }
                         }
@@ -92,10 +105,12 @@ struct ReceiptScannerView: View {
                     }
                     
                     Button {
-                        // Retake photo
+                        // Retake photo - reset all state
                         scannedImage = nil
                         scannedData = nil
                         errorMessage = nil
+                        editableAmount = ""
+                        editableLocation = ""
                         showingCamera = true
                     } label: {
                         Label("Retake Photo", systemImage: "camera")
@@ -157,26 +172,34 @@ struct ReceiptScannerView: View {
     private func processReceipt(_ image: UIImage) {
         isProcessing = true
         errorMessage = nil
-        
+
         Logger.data.info("🔵 Starting OCR processing")
-        
+
         Task {
             do {
                 let data = try await OCRService.extractReceiptData(from: image)
                 await MainActor.run {
                     scannedData = data
                     isProcessing = false
-                    Logger.data.info("✅ OCR processing complete")
-                    
+
+                    // Populate editable fields with OCR results
                     if let amount = data.amount {
+                        editableAmount = String(format: "%.2f", amount)
                         Logger.data.info("   Amount: $\(amount)")
+                    } else {
+                        editableAmount = ""
                     }
+
+                    editableLocation = data.location ?? ""
                     if let location = data.location {
                         Logger.data.info("   Location: \(location)")
                     }
+
                     if let date = data.date {
                         Logger.data.info("   Date: \(date)")
                     }
+
+                    Logger.data.info("✅ OCR processing complete")
                 }
             } catch {
                 await MainActor.run {
@@ -189,17 +212,34 @@ struct ReceiptScannerView: View {
     }
     
     private func useScannedData() {
-        guard let data = scannedData else { return }
-        
+        guard let originalData = scannedData else { return }
+
         Logger.data.info("🔵 Use button tapped")
-        
+
+        // Parse the editable amount (use user's edited value)
+        let finalAmount = Double(editableAmount)
+
+        // Use the edited location (trimmed)
+        let finalLocation = editableLocation.trimmingCharacters(in: .whitespaces)
+
+        // Create new ReceiptData with user-edited values
+        let editedData = ReceiptData(
+            amount: finalAmount,
+            location: finalLocation.isEmpty ? nil : finalLocation,
+            date: originalData.date,
+            items: originalData.items,
+            rawText: originalData.rawText
+        )
+
+        Logger.data.info("🔵 Using edited values - Amount: $\(finalAmount ?? 0), Location: \(finalLocation)")
+
         // Set the data via binding
-        pendingScanData = data
+        pendingScanData = editedData
         shouldProcessScan = true
-        
+
         Logger.data.info("🔵 Data set in binding - pendingScanData assigned")
         Logger.data.info("🔵 shouldProcessScan = true")
-        
+
         // Dismiss after a tiny delay to ensure state propagates
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             Logger.data.info("🔵 Dismissing scanner")

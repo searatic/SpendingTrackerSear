@@ -34,12 +34,12 @@ class Router {
 enum Route: Hashable {
     case expenseList
     case addExpense
-    // Removed: case scanReceipt - Receipt scanner is presented as sheet, not navigation
+    case addExpenseWithScan(receiptData: ReceiptData)
     case budgetSetup
     case charts
     case expenseDetail(id: UUID)
     case categoryBudget(categoryId: UUID)
-    
+
     @ViewBuilder
     var destination: some View {
         switch self {
@@ -47,7 +47,8 @@ enum Route: Hashable {
             ExpenseListView()
         case .addExpense:
             AddExpenseView()
-        // Removed: scanReceipt case - handled by sheet in AddExpenseView
+        case .addExpenseWithScan(let receiptData):
+            AddExpenseView(initialReceiptData: receiptData)
         case .budgetSetup:
             BudgetSetupView()
         case .charts:

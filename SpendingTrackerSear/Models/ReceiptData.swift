@@ -8,13 +8,13 @@
 
 import Foundation
 
-struct ReceiptData {
+struct ReceiptData: Hashable {
     var amount: Double?
     var location: String?
     var date: Date?
     var items: [String]?
     var rawText: String?
-    
+
     init(
         amount: Double? = nil,
         location: String? = nil,

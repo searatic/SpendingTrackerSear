@@ -16,6 +16,9 @@ struct AddExpenseView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var viewModel = AddExpenseViewModel(modelContext: DataController.live.container.mainContext)
 
+    // Optional initial data from receipt scan (passed from main menu)
+    var initialReceiptData: ReceiptData?
+
     // IMPORTANT: Explicitly specify CategoryModel type
     @Query(sort: \CategoryModel.name) private var categories: [CategoryModel]
 
@@ -159,6 +162,12 @@ struct AddExpenseView: View {
         }
         .onAppear {
             viewModel.configure(with: ExpenseService(modelContext: modelContext))
+
+            // If we have initial receipt data (from main menu scan), process it
+            if let receiptData = initialReceiptData {
+                viewModel.pendingScanData = receiptData
+                viewModel.shouldProcessScan = true
+            }
         }
         // Monitor for scanned data and process it
         .onChange(of: viewModel.shouldProcessScan) { oldValue, newValue in

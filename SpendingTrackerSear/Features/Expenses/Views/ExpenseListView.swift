@@ -8,16 +8,24 @@
 
 import SwiftUI
 import SwiftData
+import PhotosUI
 import OSLog
 
 struct ExpenseListView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(Router.self) private var router
     @State private var viewModel = ExpenseListViewModel()
-    
+
     @Query(sort: \ExpenseModel.date, order: .reverse) private var allExpenses: [ExpenseModel]
     @Query var categories: [CategoryModel]
     @Query var budgets: [BudgetModel]
+
+    // Scan receipt state
+    @State private var showingScanOptions = false
+    @State private var showingCamera = false
+    @State private var showingPhotoPicker = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var isProcessingReceipt = false
     
     var filteredExpenses: [ExpenseModel] {
         var expenses = allExpenses
@@ -118,11 +126,9 @@ struct ExpenseListView: View {
                     } label: {
                         Label("Add Expense", systemImage: "plus.circle")
                     }
-                    
-                    // ✅ FIXED: Navigate to addExpense instead of scanReceipt
-                    // User can then tap "Scan Receipt" button inside AddExpenseView
+
                     Button {
-                        router.navigate(to: .addExpense)
+                        showingScanOptions = true
                     } label: {
                         Label("Scan Receipt", systemImage: "camera")
                     }
@@ -169,8 +175,102 @@ struct ExpenseListView: View {
         .onAppear {
             viewModel.configure(with: ExpenseService(modelContext: modelContext))
         }
+        // Scan Receipt action sheet
+        .confirmationDialog("Scan Receipt", isPresented: $showingScanOptions, titleVisibility: .visible) {
+            Button("Take Photo") {
+                showingCamera = true
+            }
+            Button("Choose from Library") {
+                showingPhotoPicker = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        // Camera sheet
+        .sheet(isPresented: $showingCamera) {
+            CameraView { image in
+                processScannedImage(image)
+            }
+        }
+        // Photo picker
+        .photosPicker(isPresented: $showingPhotoPicker, selection: $selectedPhotoItem, matching: .images)
+        .onChange(of: selectedPhotoItem) { oldValue, newValue in
+            Task {
+                await processSelectedPhoto(newValue)
+            }
+        }
+        // Processing overlay
+        .overlay {
+            if isProcessingReceipt {
+                ZStack {
+                    Color.black.opacity(0.4)
+                        .ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("Processing receipt...")
+                            .foregroundStyle(.white)
+                            .font(.headline)
+                    }
+                    .padding(32)
+                    .background(.ultraThinMaterial)
+                    .cornerRadius(16)
+                }
+            }
+        }
     }
-    
+
+    // MARK: - Receipt Processing
+
+    private func processScannedImage(_ image: UIImage) {
+        isProcessingReceipt = true
+
+        Task {
+            do {
+                let receiptData = try await OCRService.extractReceiptData(from: image)
+                await MainActor.run {
+                    isProcessingReceipt = false
+                    router.navigate(to: .addExpenseWithScan(receiptData: receiptData))
+                }
+            } catch {
+                await MainActor.run {
+                    isProcessingReceipt = false
+                    viewModel.errorMessage = "Failed to process receipt: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func processSelectedPhoto(_ item: PhotosPickerItem?) async {
+        guard let item = item else { return }
+
+        await MainActor.run {
+            isProcessingReceipt = true
+        }
+
+        do {
+            if let data = try await item.loadTransferable(type: Data.self),
+               let uiImage = UIImage(data: data) {
+                let receiptData = try await OCRService.extractReceiptData(from: uiImage)
+                await MainActor.run {
+                    isProcessingReceipt = false
+                    selectedPhotoItem = nil
+                    router.navigate(to: .addExpenseWithScan(receiptData: receiptData))
+                }
+            } else {
+                await MainActor.run {
+                    isProcessingReceipt = false
+                    selectedPhotoItem = nil
+                }
+            }
+        } catch {
+            await MainActor.run {
+                isProcessingReceipt = false
+                selectedPhotoItem = nil
+                viewModel.errorMessage = "Failed to process photo: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private func getCurrentMonthSpending(for category: CategoryModel) -> Double {
         let calendar = Calendar.current
         let now = Date()
