@@ -142,11 +142,9 @@ struct ExpenseListView: View {
                     }
                     
                     Divider()
-                    
+
                     Button {
-                        Task {
-                            await viewModel.exportToCSV()
-                        }
+                        viewModel.showingExportSheet = true
                     } label: {
                         Label("Export CSV", systemImage: "square.and.arrow.up")
                     }
@@ -157,9 +155,7 @@ struct ExpenseListView: View {
         }
         .searchable(text: $viewModel.searchText, prompt: "Search expenses")
         .sheet(isPresented: $viewModel.showingExportSheet) {
-            if let url = viewModel.exportURL {
-                ShareSheet(items: [url])
-            }
+            ExportView()
         }
         .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
             Button("OK") {
